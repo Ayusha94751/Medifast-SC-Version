@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo, lazy, Suspense } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
+import { useUser, useSignIn, useSignUp } from "@clerk/clerk-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Homepage } from "./components/Homepage";
 import { LoginPage } from "./components/LoginPage";
@@ -43,25 +44,140 @@ const pageVariants = {
 const simpleTransition = { duration: 0.2, ease: "easeOut" };
 
 export default function App() {
+  // 🔥 ALL HOOKS MUST BE CALLED UNCONDITIONALLY AT THE TOP
+  
+  // Clerk hooks - always called
+  const { isSignedIn, user, isLoaded } = useUser();
+  const { signIn } = useSignIn();
+  const { signUp } = useSignUp();
+
+  // All state hooks - always called
   const [currentScreen, setCurrentScreen] = useState<Screen>("homepage");
   const [professionalScreen, setProfessionalScreen] = useState<ProfessionalScreen | null>(null);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isProfessionalMode, setIsProfessionalMode] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<Screen | null>(null);
   const [isTempAccount, setIsTempAccount] = useState(false);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [userDataComplete, setUserDataComplete] = useState(false);
 
-  // Memoized handlers to prevent unnecessary re-renders
-  const handleLogin = useCallback(() => {
-    setIsLoggedIn(true);
-    setIsTempAccount(false); // Full login sets temp account to false
-    if (pendingNavigation) {
-      setCurrentScreen(pendingNavigation);
-      setPendingNavigation(null);
-    } else {
-      setCurrentScreen("home");
+  // Check if user has complete profile data - always called
+  useEffect(() => {
+    if (!isSignedIn || !user) return;
+    
+    // Check if user has completed their profile
+    const hasBasicInfo = user.firstName && user.lastName && user.primaryPhoneNumber;
+    const hasMetadata = user.publicMetadata?.profileComplete;
+    
+    setUserDataComplete(hasBasicInfo || hasMetadata);
+    
+    // Determine if this is a temp account based on sign-up method or metadata
+    const isTemp = user.publicMetadata?.accountType === 'temporary' || !hasBasicInfo;
+    setIsTempAccount(isTemp);
+  }, [isSignedIn, user]);
+
+  // Handle authentication flow and redirects - always called
+  useEffect(() => {
+    if (!isLoaded) return; // Wait for Clerk to load
+
+    if (isSignedIn && user) {
+      // User is signed in, determine where to redirect
+      if (pendingNavigation) {
+        // User was trying to access a specific feature
+        setCurrentScreen(pendingNavigation);
+        setPendingNavigation(null);
+      } else if (!userDataComplete && currentScreen !== "register") {
+        // New user needs to complete registration
+        setCurrentScreen("register");
+      } else if (currentScreen === "homepage" || currentScreen === "login" || currentScreen === "signup") {
+        // Redirect from auth screens to main app
+        setCurrentScreen("welcome");
+      }
+    } else if (!isSignedIn && (currentScreen === "home" || currentScreen === "welcome")) {
+      // User signed out, redirect to homepage
+      setCurrentScreen("homepage");
     }
-  }, [pendingNavigation]);
+  }, [isSignedIn, user, isLoaded, userDataComplete, pendingNavigation, currentScreen]);
+
+  // All useCallback hooks - always called
+  const handleLogin = useCallback(async (email: string, password: string) => {
+    try {
+      if (!signIn) return { success: false, error: "Login not available" };
+      
+      const result = await signIn.create({
+        identifier: email,
+        password: password
+      });
+
+      if (result.status === "complete") {
+        // Login successful - useEffect will handle redirect
+        return { success: true };
+      } else {
+        // Handle additional steps if needed (2FA, etc.)
+        return { success: false, error: "Additional verification required" };
+      }
+    } catch (error: any) {
+      return { 
+        success: false, 
+        error: error.errors?.[0]?.longMessage || "Login failed" 
+      };
+    }
+  }, [signIn]);
+
+  const handleSignup = useCallback(async (email: string, password: string, isSimple: boolean = false) => {
+    try {
+      if (!signUp) return { success: false, error: "Signup not available" };
+
+      const result = await signUp.create({
+        emailAddress: email,
+        password: password
+      });
+
+      if (result.status === "missing_requirements") {
+        // Send verification email
+        await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+        return { success: true, needsVerification: true };
+      }
+
+      if (result.status === "complete") {
+        // Mark as temporary account if it's a simple signup
+        if (isSimple && user) {
+          await user.update({
+            publicMetadata: { 
+              accountType: 'temporary',
+              signupMethod: 'simple'
+            }
+          });
+        }
+        return { success: true };
+      }
+
+      return { success: false, error: "Signup incomplete" };
+    } catch (error: any) {
+      return { 
+        success: false, 
+        error: error.errors?.[0]?.longMessage || "Signup failed" 
+      };
+    }
+  }, [signUp, user]);
+
+  const handleVerifyEmail = useCallback(async (code: string) => {
+    try {
+      if (!signUp) return { success: false, error: "Verification not available" };
+
+      const result = await signUp.attemptEmailAddressVerification({ code });
+      
+      if (result.status === "complete") {
+        return { success: true };
+      }
+      
+      return { success: false, error: "Verification failed" };
+    } catch (error: any) {
+      return { 
+        success: false, 
+        error: error.errors?.[0]?.longMessage || "Verification failed" 
+      };
+    }
+  }, [signUp]);
 
   const handleGoToLogin = useCallback(() => {
     setCurrentScreen("login");
@@ -81,17 +197,38 @@ export default function App() {
     setProfessionalScreen(null);
   }, []);
 
-  const handleRegistrationComplete = useCallback(() => {
-    setIsLoggedIn(true);
-    setIsTempAccount(false); // Full registration completes the account
-    setShowRegisterModal(false);
-    if (pendingNavigation) {
-      setCurrentScreen(pendingNavigation);
-      setPendingNavigation(null);
-    } else {
-      setCurrentScreen("home");
+  const handleRegistrationComplete = useCallback(async (userData: any) => {
+    try {
+      if (user) {
+        // Update user profile with complete data
+        await user.update({
+          firstName: userData.firstName,
+          lastName: userData.lastName,
+          publicMetadata: {
+            ...user.publicMetadata,
+            profileComplete: true,
+            accountType: 'full',
+            dateOfBirth: userData.dateOfBirth,
+            phone: userData.phone,
+            address: userData.address
+          }
+        });
+
+        setUserDataComplete(true);
+        setIsTempAccount(false);
+        setShowRegisterModal(false);
+        
+        if (pendingNavigation) {
+          setCurrentScreen(pendingNavigation);
+          setPendingNavigation(null);
+        } else {
+          setCurrentScreen("welcome");
+        }
+      }
+    } catch (error) {
+      console.error("Failed to update user profile:", error);
     }
-  }, [pendingNavigation]);
+  }, [user, pendingNavigation]);
 
   const handleNavigation = useCallback((screen: Screen) => {
     setCurrentScreen(screen);
@@ -103,17 +240,13 @@ export default function App() {
   }, []);
 
   const handleSimpleSignupComplete = useCallback(() => {
-    setIsLoggedIn(true);
-    setIsTempAccount(true); // Simple signup creates temp account
-    if (pendingNavigation) {
-      setCurrentScreen(pendingNavigation);
-      setPendingNavigation(null);
-    } else {
-      setCurrentScreen("home");
-    }
-  }, [pendingNavigation]);
+    setIsTempAccount(true);
+  }, []);
 
-  // New handlers for trial account flow
+  const handleWelcomeComplete = useCallback(() => {
+    setCurrentScreen("home");
+  }, []);
+
   const handleOpenRegisterModal = useCallback(() => {
     setShowRegisterModal(true);
   }, []);
@@ -140,10 +273,14 @@ export default function App() {
     };
     const targetScreen = screenMap[featureType];
     if (targetScreen) {
-      setPendingNavigation(targetScreen);
-      setCurrentScreen("signup");
+      if (isSignedIn) {
+        setCurrentScreen(targetScreen);
+      } else {
+        setPendingNavigation(targetScreen);
+        setCurrentScreen("signup");
+      }
     }
-  }, []);
+  }, [isSignedIn]);
 
   const handleProfessionalPortalSelection = useCallback((portal: string) => {
     setProfessionalScreen(portal as ProfessionalScreen);
@@ -167,7 +304,7 @@ export default function App() {
     handleTrialFeatureAccess(targetScreen);
   }, [handleTrialFeatureAccess]);
 
-  // Simplified professional screen renderer
+  // Render functions - defined as regular functions, not hooks
   const renderProfessionalScreen = () => {
     switch (professionalScreen) {
       case "professional-portal":
@@ -195,7 +332,6 @@ export default function App() {
     }
   };
 
-  // Simplified main screen renderer
   const renderScreen = () => {
     const backToHome = () => setCurrentScreen("home");
     
@@ -251,15 +387,31 @@ export default function App() {
     }
   };
 
-  // Memoized tab active state
+  // useMemo hook - always called, but logic handled inside
   const activeTab = useMemo(() => {
+    if (!isSignedIn) return "home"; // Handle condition inside
+    
     if (currentScreen === "home") return "home";
     if (currentScreen === "appointments") return "appointments";
     if (["wellness", "mental", "yoga", "nutrition"].includes(currentScreen)) return "wellness";
     if (currentScreen === "chat") return "chat";
     if (currentScreen === "profile") return "profile";
     return "home";
-  }, [currentScreen]);
+  }, [currentScreen, isSignedIn]);
+
+  // 🔥 NO MORE EARLY RETURNS - All hooks are now called unconditionally above
+
+  // Show loading state while Clerk is initializing
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-blue-50 to-green-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   // Handle professional portal mode
   if (isProfessionalMode) {
@@ -273,7 +425,7 @@ export default function App() {
   }
 
   // Handle non-logged-in states
-  if (!isLoggedIn) {
+  if (!isSignedIn) {
     switch (currentScreen) {
       case "homepage":
         return (
@@ -293,27 +445,20 @@ export default function App() {
             onLogin={handleLogin} 
             onSignup={handleGoToSignup}
             onBack={handleBackToHomepage}
+            onVerifyEmail={handleVerifyEmail}
           />
         );
       case "signup":
         return (
           <LoginPage 
             onLogin={handleLogin} 
+            onSignup={handleSignup}
             onSignupComplete={handleSimpleSignupComplete}
             onBack={handleBackToHomepage}
+            onVerifyEmail={handleVerifyEmail}
             isSignupMode={true}
           />
         );
-      case "register":
-        return (
-          <RegistrationForm 
-            onComplete={handleRegistrationComplete}
-            onBack={handleGoToLogin}
-            isAfterSimpleSignup={true}
-          />
-        );
-      case "welcome":
-        return <WelcomeScreen onLogin={handleLogin} />;
       default:
         return (
           <>
@@ -327,6 +472,22 @@ export default function App() {
           </>
         );
     }
+  }
+
+  // Handle post-login flows for signed-in users
+  if (currentScreen === "register") {
+    return (
+      <RegistrationForm 
+        onComplete={handleRegistrationComplete}
+        onBack={handleGoToLogin}
+        isAfterSimpleSignup={isTempAccount}
+        user={user}
+      />
+    );
+  }
+
+  if (currentScreen === "welcome") {
+    return <WelcomeScreen onContinue={handleWelcomeComplete} user={user} />;
   }
 
   // Main logged-in app
@@ -355,6 +516,7 @@ export default function App() {
         onClose={handleCloseRegisterModal}
         onComplete={handleRegistrationComplete}
         isTempAccount={isTempAccount}
+        user={user}
       />
     </div>
   );
