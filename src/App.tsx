@@ -1,6 +1,5 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
-import { useUser, useSignIn, useSignUp } from "@clerk/clerk-react";
-import { motion, AnimatePresence } from "motion/react";
+import { useState, useCallback, useMemo, lazy, Suspense } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Homepage } from "./components/Homepage";
 import { LoginPage } from "./components/LoginPage";
 import { RegistrationForm } from "./components/RegistrationForm";
@@ -13,171 +12,64 @@ import { ChatbotWidget } from "./components/ChatbotWidget";
 import { TrialAccountBanner } from "./components/TrialAccountBanner";
 import { RegisterModal } from "./components/RegisterModal";
 
-// Direct imports for better performance
-import { DoctorSearch } from "./components/DoctorSearch";
-import { MedicineOrdering } from "./components/MedicineOrdering";
-import { LabTestBooking } from "./components/LabTestBooking";
-import { EmergencyServices } from "./components/EmergencyServices";
-import { MentalHealthSupport } from "./components/MentalHealthSupport";
-import { AISymptomChecker } from "./components/AISymptomChecker";
-import { YogaExerciseTracker } from "./components/YogaExerciseTracker";
-import { NutritionTracker } from "./components/NutritionTracker";
-import { PersonalHealthDashboard } from "./components/PersonalHealthDashboard";
-import { DoctorDashboard } from "./components/DoctorDashboard";
-import { PharmacistDashboard } from "./components/PharmacistDashboard";
-import { LabDashboard } from "./components/LabDashboard";
-import { AmbulanceDashboard } from "./components/AmbulanceDashboard";
-import { SubscriptionPage } from "./components/SubscriptionPage";
-import { ChatSupport } from "./components/ChatSupport";
-import { ProfileManagement } from "./components/ProfileManagement";
+// Lazy load heavy components to improve initial load time
+const DoctorSearch = lazy(() => import("./components/DoctorSearch").then(module => ({ default: module.DoctorSearch })));
+const MedicineOrdering = lazy(() => import("./components/MedicineOrdering").then(module => ({ default: module.MedicineOrdering })));
+const LabTestBooking = lazy(() => import("./components/LabTestBooking").then(module => ({ default: module.LabTestBooking })));
+const EmergencyServices = lazy(() => import("./components/EmergencyServices").then(module => ({ default: module.EmergencyServices })));
+const MentalHealthSupport = lazy(() => import("./components/MentalHealthSupport").then(module => ({ default: module.MentalHealthSupport })));
+const AISymptomChecker = lazy(() => import("./components/AISymptomChecker").then(module => ({ default: module.AISymptomChecker })));
+const YogaExerciseTracker = lazy(() => import("./components/YogaExerciseTracker").then(module => ({ default: module.YogaExerciseTracker })));
+const NutritionTracker = lazy(() => import("./components/NutritionTracker").then(module => ({ default: module.NutritionTracker })));
+const PersonalHealthDashboard = lazy(() => import("./components/PersonalHealthDashboard").then(module => ({ default: module.PersonalHealthDashboard })));
+const DoctorDashboard = lazy(() => import("./components/DoctorDashboard").then(module => ({ default: module.DoctorDashboard })));
+const PharmacistDashboard = lazy(() => import("./components/PharmacistDashboard").then(module => ({ default: module.PharmacistDashboard })));
+const LabDashboard = lazy(() => import("./components/LabDashboard").then(module => ({ default: module.LabDashboard })));
+const AmbulanceDashboard = lazy(() => import("./components/AmbulanceDashboard").then(module => ({ default: module.AmbulanceDashboard })));
+const SubscriptionPage = lazy(() => import("./components/SubscriptionPage").then(module => ({ default: module.SubscriptionPage })));
 
 type Screen = "homepage" | "login" | "signup" | "register" | "welcome" | "home" | "doctors" | "medicine" | "lab" | "ambulance" | "mental" | "yoga" | "nutrition" | "notifications" | "profile" | "appointments" | "wellness" | "chat" | "ai-symptom-checker" | "subscription";
 type ProfessionalScreen = "professional-portal" | "doctor-dashboard" | "pharmacist-dashboard" | "lab-dashboard" | "ambulance-dashboard";
 
+// Loading component for Suspense
+const LoadingSpinner = () => (
+  <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-50 to-green-50">
+    <div className="flex flex-col items-center space-y-4">
+      <div className="w-8 h-8 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
+      <p className="text-teal-600">Loading...</p>
+    </div>
+  </div>
+);
+
 // Simple transition variants to reduce animation complexity
 const pageVariants = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 }
+  initial: { opacity: 0, x: 20 },
+  animate: { opacity: 1, x: 0 },
+  exit: { opacity: 0, x: -20 }
 };
 
-const simpleTransition = { duration: 0.2, ease: "easeOut" };
+const simpleTransition = { duration: 0.3, ease: "easeOut" };
 
 export default function App() {
-  // 🔥 ALL HOOKS MUST BE CALLED UNCONDITIONALLY AT THE TOP
-  
-  // Clerk hooks - always called
-  const { isSignedIn, user, isLoaded } = useUser();
-  const { signIn } = useSignIn();
-  const { signUp } = useSignUp();
-
-  // All state hooks - always called
   const [currentScreen, setCurrentScreen] = useState<Screen>("homepage");
   const [professionalScreen, setProfessionalScreen] = useState<ProfessionalScreen | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isProfessionalMode, setIsProfessionalMode] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<Screen | null>(null);
   const [isTempAccount, setIsTempAccount] = useState(false);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [userDataComplete, setUserDataComplete] = useState(false);
 
-  // Check if user has complete profile data - always called
-  useEffect(() => {
-    if (!isSignedIn || !user) return;
-    
-    // Check if user has completed their profile
-    const hasBasicInfo = user.firstName && user.lastName && user.primaryPhoneNumber;
-    const hasMetadata = user.publicMetadata?.profileComplete;
-    
-    setUserDataComplete(hasBasicInfo || hasMetadata);
-    
-    // Determine if this is a temp account based on sign-up method or metadata
-    const isTemp = user.publicMetadata?.accountType === 'temporary' || !hasBasicInfo;
-    setIsTempAccount(isTemp);
-  }, [isSignedIn, user]);
-
-  // Handle authentication flow and redirects - always called
-  useEffect(() => {
-    if (!isLoaded) return; // Wait for Clerk to load
-
-    if (isSignedIn && user) {
-      // User is signed in, determine where to redirect
-      if (pendingNavigation) {
-        // User was trying to access a specific feature
-        setCurrentScreen(pendingNavigation);
-        setPendingNavigation(null);
-      } else if (!userDataComplete && currentScreen !== "register") {
-        // New user needs to complete registration
-        setCurrentScreen("register");
-      } else if (currentScreen === "homepage" || currentScreen === "login" || currentScreen === "signup") {
-        // Redirect from auth screens to main app
-        setCurrentScreen("welcome");
-      }
-    } else if (!isSignedIn && (currentScreen === "home" || currentScreen === "welcome")) {
-      // User signed out, redirect to homepage
-      setCurrentScreen("homepage");
+  // Memoized handlers to prevent unnecessary re-renders
+  const handleLogin = useCallback(() => {
+    setIsLoggedIn(true);
+    setIsTempAccount(false); // Full login sets temp account to false
+    if (pendingNavigation) {
+      setCurrentScreen(pendingNavigation);
+      setPendingNavigation(null);
+    } else {
+      setCurrentScreen("home");
     }
-  }, [isSignedIn, user, isLoaded, userDataComplete, pendingNavigation, currentScreen]);
-
-  // All useCallback hooks - always called
-  const handleLogin = useCallback(async (email: string, password: string) => {
-    try {
-      if (!signIn) return { success: false, error: "Login not available" };
-      
-      const result = await signIn.create({
-        identifier: email,
-        password: password
-      });
-
-      if (result.status === "complete") {
-        // Login successful - useEffect will handle redirect
-        return { success: true };
-      } else {
-        // Handle additional steps if needed (2FA, etc.)
-        return { success: false, error: "Additional verification required" };
-      }
-    } catch (error: any) {
-      return { 
-        success: false, 
-        error: error.errors?.[0]?.longMessage || "Login failed" 
-      };
-    }
-  }, [signIn]);
-
-  const handleSignup = useCallback(async (email: string, password: string, isSimple: boolean = false) => {
-    try {
-      if (!signUp) return { success: false, error: "Signup not available" };
-
-      const result = await signUp.create({
-        emailAddress: email,
-        password: password
-      });
-
-      if (result.status === "missing_requirements") {
-        // Send verification email
-        await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
-        return { success: true, needsVerification: true };
-      }
-
-      if (result.status === "complete") {
-        // Mark as temporary account if it's a simple signup
-        if (isSimple && user) {
-          await user.update({
-            publicMetadata: { 
-              accountType: 'temporary',
-              signupMethod: 'simple'
-            }
-          });
-        }
-        return { success: true };
-      }
-
-      return { success: false, error: "Signup incomplete" };
-    } catch (error: any) {
-      return { 
-        success: false, 
-        error: error.errors?.[0]?.longMessage || "Signup failed" 
-      };
-    }
-  }, [signUp, user]);
-
-  const handleVerifyEmail = useCallback(async (code: string) => {
-    try {
-      if (!signUp) return { success: false, error: "Verification not available" };
-
-      const result = await signUp.attemptEmailAddressVerification({ code });
-      
-      if (result.status === "complete") {
-        return { success: true };
-      }
-      
-      return { success: false, error: "Verification failed" };
-    } catch (error: any) {
-      return { 
-        success: false, 
-        error: error.errors?.[0]?.longMessage || "Verification failed" 
-      };
-    }
-  }, [signUp]);
+  }, [pendingNavigation]);
 
   const handleGoToLogin = useCallback(() => {
     setCurrentScreen("login");
@@ -197,38 +89,17 @@ export default function App() {
     setProfessionalScreen(null);
   }, []);
 
-  const handleRegistrationComplete = useCallback(async (userData: any) => {
-    try {
-      if (user) {
-        // Update user profile with complete data
-        await user.update({
-          firstName: userData.firstName,
-          lastName: userData.lastName,
-          publicMetadata: {
-            ...user.publicMetadata,
-            profileComplete: true,
-            accountType: 'full',
-            dateOfBirth: userData.dateOfBirth,
-            phone: userData.phone,
-            address: userData.address
-          }
-        });
-
-        setUserDataComplete(true);
-        setIsTempAccount(false);
-        setShowRegisterModal(false);
-        
-        if (pendingNavigation) {
-          setCurrentScreen(pendingNavigation);
-          setPendingNavigation(null);
-        } else {
-          setCurrentScreen("welcome");
-        }
-      }
-    } catch (error) {
-      console.error("Failed to update user profile:", error);
+  const handleRegistrationComplete = useCallback(() => {
+    setIsLoggedIn(true);
+    setIsTempAccount(false); // Full registration completes the account
+    setShowRegisterModal(false);
+    if (pendingNavigation) {
+      setCurrentScreen(pendingNavigation);
+      setPendingNavigation(null);
+    } else {
+      setCurrentScreen("home");
     }
-  }, [user, pendingNavigation]);
+  }, [pendingNavigation]);
 
   const handleNavigation = useCallback((screen: Screen) => {
     setCurrentScreen(screen);
@@ -240,13 +111,17 @@ export default function App() {
   }, []);
 
   const handleSimpleSignupComplete = useCallback(() => {
-    setIsTempAccount(true);
-  }, []);
+    setIsLoggedIn(true);
+    setIsTempAccount(true); // Simple signup creates temp account
+    if (pendingNavigation) {
+      setCurrentScreen(pendingNavigation);
+      setPendingNavigation(null);
+    } else {
+      setCurrentScreen("home");
+    }
+  }, [pendingNavigation]);
 
-  const handleWelcomeComplete = useCallback(() => {
-    setCurrentScreen("home");
-  }, []);
-
+  // New handlers for trial account flow
   const handleOpenRegisterModal = useCallback(() => {
     setShowRegisterModal(true);
   }, []);
@@ -273,14 +148,10 @@ export default function App() {
     };
     const targetScreen = screenMap[featureType];
     if (targetScreen) {
-      if (isSignedIn) {
-        setCurrentScreen(targetScreen);
-      } else {
-        setPendingNavigation(targetScreen);
-        setCurrentScreen("signup");
-      }
+      setPendingNavigation(targetScreen);
+      setCurrentScreen("signup");
     }
-  }, [isSignedIn]);
+  }, []);
 
   const handleProfessionalPortalSelection = useCallback((portal: string) => {
     setProfessionalScreen(portal as ProfessionalScreen);
@@ -304,8 +175,8 @@ export default function App() {
     handleTrialFeatureAccess(targetScreen);
   }, [handleTrialFeatureAccess]);
 
-  // Render functions - defined as regular functions, not hooks
-  const renderProfessionalScreen = () => {
+  // Memoized professional screen renderer
+  const renderProfessionalScreen = useMemo(() => {
     switch (professionalScreen) {
       case "professional-portal":
         return (
@@ -315,13 +186,29 @@ export default function App() {
           />
         );
       case "doctor-dashboard":
-        return <DoctorDashboard onBack={handleBackToProfessionalPortal} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <DoctorDashboard onBack={handleBackToProfessionalPortal} />
+          </Suspense>
+        );
       case "pharmacist-dashboard":
-        return <PharmacistDashboard onBack={handleBackToProfessionalPortal} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <PharmacistDashboard onBack={handleBackToProfessionalPortal} />
+          </Suspense>
+        );
       case "lab-dashboard":
-        return <LabDashboard onBack={handleBackToProfessionalPortal} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <LabDashboard onBack={handleBackToProfessionalPortal} />
+          </Suspense>
+        );
       case "ambulance-dashboard":
-        return <AmbulanceDashboard onBack={handleBackToProfessionalPortal} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <AmbulanceDashboard onBack={handleBackToProfessionalPortal} />
+          </Suspense>
+        );
       default:
         return (
           <ProfessionalPortal 
@@ -330,9 +217,10 @@ export default function App() {
           />
         );
     }
-  };
+  }, [professionalScreen, handleProfessionalPortalSelection, handleBackToHomepage, handleBackToProfessionalPortal]);
 
-  const renderScreen = () => {
+  // Memoized main screen renderer
+  const renderScreen = useMemo(() => {
     const backToHome = () => setCurrentScreen("home");
     
     switch (currentScreen) {
@@ -343,40 +231,80 @@ export default function App() {
           onOpenRegisterModal={handleOpenRegisterModal}
         />;
       case "doctors":
-        return <DoctorSearch onBack={backToHome} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <DoctorSearch onBack={backToHome} />
+          </Suspense>
+        );
       case "medicine":
-        return <MedicineOrdering onBack={backToHome} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <MedicineOrdering onBack={backToHome} />
+          </Suspense>
+        );
       case "lab":
-        return <LabTestBooking onBack={backToHome} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <LabTestBooking onBack={backToHome} />
+          </Suspense>
+        );
       case "ambulance":
-        return <EmergencyServices onBack={backToHome} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <EmergencyServices onBack={backToHome} />
+          </Suspense>
+        );
       case "mental":
-        return <MentalHealthSupport onBack={backToHome} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <MentalHealthSupport onBack={backToHome} />
+          </Suspense>
+        );
       case "ai-symptom-checker":
-        return <AISymptomChecker onBack={backToHome} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <AISymptomChecker onBack={backToHome} />
+          </Suspense>
+        );
       case "yoga":
-        return <YogaExerciseTracker onBack={backToHome} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <YogaExerciseTracker onBack={backToHome} />
+          </Suspense>
+        );
       case "nutrition":
-        return <NutritionTracker onBack={backToHome} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <NutritionTracker onBack={backToHome} />
+          </Suspense>
+        );
       case "appointments":
-        return <PersonalHealthDashboard 
-          onBack={backToHome} 
-          onNavigate={handleNavigation}
-        />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <PersonalHealthDashboard 
+              onBack={backToHome} 
+              onNavigate={handleNavigation}
+            />
+          </Suspense>
+        );
       case "subscription":
-        return <SubscriptionPage onBack={backToHome} />;
-      case "chat":
-        return <ChatSupport onBack={backToHome} />;
-      case "profile":
-        return <ProfileManagement onBack={backToHome} isTempAccount={isTempAccount} />;
+        return (
+          <Suspense fallback={<LoadingSpinner />}>
+            <SubscriptionPage onBack={backToHome} />
+          </Suspense>
+        );
       case "notifications":
+      case "profile":
       case "wellness":
+      case "chat":
         return (
           <div className="p-6 pt-20 text-center min-h-screen bg-gradient-to-b from-blue-50 to-green-50">
             <div className="max-w-md mx-auto">
               <h2 className="text-2xl font-medium text-gray-900 mb-4">
                 {currentScreen === "notifications" && "Notifications"}
+                {currentScreen === "profile" && "Profile"}
                 {currentScreen === "wellness" && "Wellness Tracking"}
+                {currentScreen === "chat" && "Chat Support"}
               </h2>
               <p className="text-gray-600">Coming soon...</p>
             </div>
@@ -385,47 +313,38 @@ export default function App() {
       default:
         return <PatientDashboard onNavigate={handleNavigation} />;
     }
-  };
+  }, [currentScreen, handleNavigation]);
 
-  // useMemo hook - always called, but logic handled inside
+  // Memoized tab active state
   const activeTab = useMemo(() => {
-    if (!isSignedIn) return "home"; // Handle condition inside
-    
     if (currentScreen === "home") return "home";
     if (currentScreen === "appointments") return "appointments";
     if (["wellness", "mental", "yoga", "nutrition"].includes(currentScreen)) return "wellness";
     if (currentScreen === "chat") return "chat";
     if (currentScreen === "profile") return "profile";
     return "home";
-  }, [currentScreen, isSignedIn]);
-
-  // 🔥 NO MORE EARLY RETURNS - All hooks are now called unconditionally above
-
-  // Show loading state while Clerk is initializing
-  if (!isLoaded) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-blue-50 to-green-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    );
-  }
+  }, [currentScreen]);
 
   // Handle professional portal mode
   if (isProfessionalMode) {
     return (
       <div className="min-h-screen">
-        <div>
-          {renderProfessionalScreen()}
-        </div>
+        <motion.div
+          key={professionalScreen}
+          variants={pageVariants}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          transition={simpleTransition}
+        >
+          {renderProfessionalScreen}
+        </motion.div>
       </div>
     );
   }
 
   // Handle non-logged-in states
-  if (!isSignedIn) {
+  if (!isLoggedIn) {
     switch (currentScreen) {
       case "homepage":
         return (
@@ -445,20 +364,27 @@ export default function App() {
             onLogin={handleLogin} 
             onSignup={handleGoToSignup}
             onBack={handleBackToHomepage}
-            onVerifyEmail={handleVerifyEmail}
           />
         );
       case "signup":
         return (
           <LoginPage 
             onLogin={handleLogin} 
-            onSignup={handleSignup}
             onSignupComplete={handleSimpleSignupComplete}
             onBack={handleBackToHomepage}
-            onVerifyEmail={handleVerifyEmail}
             isSignupMode={true}
           />
         );
+      case "register":
+        return (
+          <RegistrationForm 
+            onComplete={handleRegistrationComplete}
+            onBack={handleGoToLogin}
+            isAfterSimpleSignup={true}
+          />
+        );
+      case "welcome":
+        return <WelcomeScreen onLogin={handleLogin} />;
       default:
         return (
           <>
@@ -474,22 +400,6 @@ export default function App() {
     }
   }
 
-  // Handle post-login flows for signed-in users
-  if (currentScreen === "register") {
-    return (
-      <RegistrationForm 
-        onComplete={handleRegistrationComplete}
-        onBack={handleGoToLogin}
-        isAfterSimpleSignup={isTempAccount}
-        user={user}
-      />
-    );
-  }
-
-  if (currentScreen === "welcome") {
-    return <WelcomeScreen onContinue={handleWelcomeComplete} user={user} />;
-  }
-
   // Main logged-in app
   return (
     <div className="min-h-screen bg-gray-50">
@@ -500,9 +410,16 @@ export default function App() {
         />
       )}
       
-      <div>
-        {renderScreen()}
-      </div>
+      <motion.div
+        key={currentScreen}
+        variants={pageVariants}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        transition={simpleTransition}
+      >
+        {renderScreen}
+      </motion.div>
       
       <BottomTabBar 
         activeTab={activeTab}
@@ -516,7 +433,6 @@ export default function App() {
         onClose={handleCloseRegisterModal}
         onComplete={handleRegistrationComplete}
         isTempAccount={isTempAccount}
-        user={user}
       />
     </div>
   );
