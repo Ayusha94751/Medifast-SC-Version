@@ -46,7 +46,7 @@ const ChatbotWidget = memo(function ChatbotWidget() {
     setIsTyping(true);
 
     try {
-      const response = await fetch("https://spies-clip-franchise-cloth.trycloudflare.com/chat", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
